@@ -20,17 +20,17 @@ package paxos
 // px.Min() int -- instances before this seq have been forgotten
 //
 
-import "net"
-import "net/rpc"
-import "log"
-
-import "os"
-import "syscall"
-import "sync"
-import "sync/atomic"
-import "fmt"
-import "math/rand"
-
+import (
+	"fmt"
+	"log"
+	"math/rand"
+	"net"
+	"net/rpc"
+	"os"
+	"sync"
+	"sync/atomic"
+	"syscall"
+)
 
 // px.Status() return values, indicating
 // whether an agreement has been decided,
@@ -53,8 +53,10 @@ type Paxos struct {
 	peers      []string
 	me         int // index into peers[]
 
-
 	// Your data here.
+	instances map[int]*Instance //instance:proposer,acceptor,learner
+
+	round int
 }
 
 //
@@ -78,7 +80,7 @@ func call(srv string, name string, args interface{}, reply interface{}) bool {
 	if err != nil {
 		err1 := err.(*net.OpError)
 		if err1.Err != syscall.ENOENT && err1.Err != syscall.ECONNREFUSED {
-			fmt.Printf("paxos Dial() failed: %v\n", err1)
+			//fmt.Printf("paxos Dial() failed: %v\n", err1)
 		}
 		return false
 	}
@@ -92,7 +94,6 @@ func call(srv string, name string, args interface{}, reply interface{}) bool {
 	fmt.Println(err)
 	return false
 }
-
 
 //
 // the application wants paxos to start agreement on
@@ -170,8 +171,6 @@ func (px *Paxos) Status(seq int) (Fate, interface{}) {
 	return Pending, nil
 }
 
-
-
 //
 // tell the peer to shut itself down.
 // for testing.
@@ -213,7 +212,6 @@ func Make(peers []string, me int, rpcs *rpc.Server) *Paxos {
 	px := &Paxos{}
 	px.peers = peers
 	px.me = me
-
 
 	// Your initialization code here.
 
@@ -267,7 +265,6 @@ func Make(peers []string, me int, rpcs *rpc.Server) *Paxos {
 			}
 		}()
 	}
-
 
 	return px
 }

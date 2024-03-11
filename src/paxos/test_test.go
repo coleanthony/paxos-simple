@@ -1,15 +1,18 @@
 package paxos
 
-import "testing"
-import "runtime"
-import "strconv"
-import "os"
-import "time"
-import "fmt"
-import "math/rand"
-import crand "crypto/rand"
-import "encoding/base64"
-import "sync/atomic"
+import (
+	"fmt"
+	"math/rand"
+	"os"
+	"runtime"
+	"strconv"
+	"testing"
+	"time"
+
+	crand "crypto/rand"
+	"encoding/base64"
+	"sync/atomic"
+)
 
 func randstring(n int) string {
 	b := make([]byte, 2*n)
@@ -19,7 +22,7 @@ func randstring(n int) string {
 }
 
 func port(tag string, host int) string {
-	s := "/var/tmp/824-"
+	s := "/home/cwh/paxos_test/824-"
 	s += strconv.Itoa(os.Getuid()) + "/"
 	os.Mkdir(s, 0777)
 	s += "px-"
@@ -710,7 +713,7 @@ func TestManyUnreliable(t *testing.T) {
 }
 
 func pp(tag string, src int, dst int) string {
-	s := "/var/tmp/824-"
+	s := "/home/cwh/paxos_test/824-"
 	s += strconv.Itoa(os.Getuid()) + "/"
 	s += "px-" + tag + "-"
 	s += strconv.Itoa(os.Getpid()) + "-"
