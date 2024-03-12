@@ -23,6 +23,7 @@ package paxos
 import (
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"net/rpc"
@@ -30,6 +31,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 )
 
 // px.Status() return values, indicating
@@ -37,6 +39,8 @@ import (
 // or Paxos has not yet reached agreement,
 // or it was agreed but forgotten (i.e. < Min()).
 type Fate int
+
+const proposeTimeout = 1 * time.Second
 
 const (
 	Decided   Fate = iota + 1
@@ -54,45 +58,25 @@ type Paxos struct {
 	me         int // index into peers[]
 
 	// Your data here.
-	instances map[int]*Instance //instance:proposer,acceptor,learner
-
-	round int
+	instances          map[int]*Instance // instance:proposer,acceptor,learner
+	doneSeqs           []int             // the highest sequence numbers ever passed to Done for each peer.
+	maxSeenSeqNum      int               // highest seq known to this peer
+	maxForgottenSeqNum int               // highest seq forgotten by this peer
+	maxProposeNum      int               // highest proposenum this peer ever seen
+	roundNum           int               // current roundnum
+	//ticker             *time.Ticker      // timeout ticker
 }
 
-//
-// call() sends an RPC to the rpcname handler on server srv
-// with arguments args, waits for the reply, and leaves the
-// reply in reply. the reply argument should be a pointer
-// to a reply structure.
-//
-// the return value is true if the server responded, and false
-// if call() was not able to contact the server. in particular,
-// the replys contents are only valid if call() returned true.
-//
-// you should assume that call() will time out and return an
-// error after a while if it does not get a reply from the server.
-//
-// please use call() to send all RPCs, in client.go and server.go.
-// please do not change this function.
-//
-func call(srv string, name string, args interface{}, reply interface{}) bool {
-	c, err := rpc.Dial("unix", srv)
-	if err != nil {
-		err1 := err.(*net.OpError)
-		if err1.Err != syscall.ENOENT && err1.Err != syscall.ECONNREFUSED {
-			//fmt.Printf("paxos Dial() failed: %v\n", err1)
-		}
-		return false
+func (px *Paxos) UpdateMaxseenSeq(seq int) {
+	if px.maxSeenSeqNum < seq {
+		px.maxSeenSeqNum = seq
 	}
-	defer c.Close()
+}
 
-	err = c.Call(name, args, reply)
-	if err == nil {
-		return true
+func (px *Paxos) UpdateMaxseenProposeNum(proposenum int) {
+	if px.maxProposeNum < proposenum {
+		px.maxProposeNum = proposenum
 	}
-
-	fmt.Println(err)
-	return false
 }
 
 //
@@ -104,6 +88,34 @@ func call(srv string, name string, args interface{}, reply interface{}) bool {
 //
 func (px *Paxos) Start(seq int, v interface{}) {
 	// Your code here.
+	if seq < px.Min() {
+		return
+	}
+	px.mu.Lock()
+	px.UpdateMaxseenSeq(seq)
+
+	//propose a proposal by instanse<seq>
+	ins := px.getInstance(seq)
+	if ins.decidedvalues == nil && !ins.Proposing {
+		ins.Proposing = true
+		go px.Propose(seq, v)
+	}
+	px.mu.Unlock()
+}
+
+func (px *Paxos) Doforgetting(seq int) {
+	forgetset := make([]int, 0)
+	for k, _ := range px.instances {
+		if k <= seq {
+			forgetset = append(forgetset, k)
+		}
+	}
+	for _, v := range forgetset {
+		delete(px.instances, v)
+		if px.maxForgottenSeqNum < seq {
+			px.maxForgottenSeqNum = seq
+		}
+	}
 }
 
 //
@@ -113,7 +125,12 @@ func (px *Paxos) Start(seq int, v interface{}) {
 // see the comments for Min() for more explanation.
 //
 func (px *Paxos) Done(seq int) {
-	// Your code here.
+	px.mu.Lock()
+	defer px.mu.Unlock()
+	if px.doneSeqs[px.me] < seq {
+		px.doneSeqs[px.me] = seq
+	}
+	px.Doforgetting(seq)
 }
 
 //
@@ -122,8 +139,9 @@ func (px *Paxos) Done(seq int) {
 // this peer.
 //
 func (px *Paxos) Max() int {
-	// Your code here.
-	return 0
+	px.mu.Lock()
+	defer px.mu.Unlock()
+	return px.maxSeenSeqNum
 }
 
 //
@@ -156,7 +174,16 @@ func (px *Paxos) Max() int {
 //
 func (px *Paxos) Min() int {
 	// You code here.
-	return 0
+	px.mu.Lock()
+	defer px.mu.Unlock()
+	mindoneseqnum := math.MaxInt
+	for _, v := range px.doneSeqs {
+		mindoneseqnum = min(mindoneseqnum, v)
+	}
+	//release memory
+	px.Doforgetting(mindoneseqnum)
+
+	return mindoneseqnum + 1
 }
 
 //
@@ -168,7 +195,18 @@ func (px *Paxos) Min() int {
 //
 func (px *Paxos) Status(seq int) (Fate, interface{}) {
 	// Your code here.
-	return Pending, nil
+	if seq < px.Min() {
+		return Forgotten, nil
+	}
+
+	//get status by instance
+	px.mu.Lock()
+	defer px.mu.Unlock()
+	ins := px.getInstance(seq)
+	if ins.decidedvalues == nil {
+		return Pending, nil
+	}
+	return Decided, ins.decidedvalues
 }
 
 //
@@ -209,11 +247,23 @@ func (px *Paxos) isunreliable() bool {
 // are in peers[]. this servers port is peers[me].
 //
 func Make(peers []string, me int, rpcs *rpc.Server) *Paxos {
-	px := &Paxos{}
-	px.peers = peers
-	px.me = me
+	px := &Paxos{
+		peers:              peers,
+		me:                 me,
+		mu:                 sync.Mutex{},
+		instances:          make(map[int]*Instance),
+		maxSeenSeqNum:      -1,
+		maxForgottenSeqNum: -1,
+		roundNum:           0,
+		maxProposeNum:      -1,
+		//ticker:             time.NewTicker(proposeTimeout),
+	}
 
-	// Your initialization code here.
+	numpeers := len(peers)
+	px.doneSeqs = make([]int, numpeers)
+	for i := 0; i < numpeers; i++ {
+		px.doneSeqs[i] = -1
+	}
 
 	if rpcs != nil {
 		// caller will create socket &c
