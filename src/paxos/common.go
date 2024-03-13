@@ -37,10 +37,12 @@ type DecideArgs struct {
 	Value      interface{}
 	SeqNum     int
 	ProposeNum int
+	DoneSeqNum int
 }
 
 type DecideReplys struct {
-	OK bool
+	OK         bool
+	DoneSeqNum int
 }
 
 //

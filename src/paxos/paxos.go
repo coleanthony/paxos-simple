@@ -79,6 +79,12 @@ func (px *Paxos) UpdateMaxseenProposeNum(proposenum int) {
 	}
 }
 
+func (px *Paxos) UpdateMaxseenDoneseq(doneseq int, id int) {
+	if px.doneSeqs[id] < doneseq {
+		px.doneSeqs[id] = doneseq
+	}
+}
+
 func (px *Paxos) Majority() int {
 	px.mu.Lock()
 	defer px.mu.Unlock()
