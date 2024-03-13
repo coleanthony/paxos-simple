@@ -19,6 +19,10 @@ type Instance struct {
 	proposeNum    int
 	prepareOKNum  int
 	acceptOKNum   int
+	prepareOK     []bool
+	//acceptOK                   []bool
+	PeersMaxAcceptedProposeNum []int
+	PeersMaxAcceptedProposeVal []interface{}
 
 	//acceptor
 	accpetedvalues     interface{} //accpeted value
@@ -38,12 +42,22 @@ func makeInstance(seqNum int, value interface{}, numpeers int) *Instance {
 		proposeNum:    -1,
 		prepareOKNum:  0,
 		acceptOKNum:   0,
+		prepareOK:     make([]bool, numpeers),
+		//acceptOK:                   make([]bool, numpeers),
+		PeersMaxAcceptedProposeNum: make([]int, numpeers),
+		PeersMaxAcceptedProposeVal: make([]interface{}, numpeers),
 
 		accpetedvalues:     nil,
 		highestPrepareSeen: -1,
 		highestAcceptSeen:  -1,
 
 		decidedvalues: nil,
+	}
+	for i := 0; i < numpeers; i++ {
+		instance.PeersMaxAcceptedProposeNum[i] = -1
+		instance.PeersMaxAcceptedProposeVal = nil
+		instance.prepareOK[i] = false
+		//instance.acceptOK[i] = false
 	}
 	return instance
 }
@@ -57,6 +71,15 @@ func (px *Paxos) getInstance(seqNum int) *Instance {
 	return ins
 }
 
-func (px *Paxos) setInstance(ins *Instance, value interface{}) {
-
+//used when propose timeout, need to reset the instance
+func (px *Paxos) resetInstance(ins *Instance, value interface{}) {
+	ins.proposevalues = value
+	ins.prepareOKNum = 0
+	ins.acceptOKNum = 0
+	for i := 0; i < len(px.peers); i++ {
+		ins.PeersMaxAcceptedProposeNum[i] = -1
+		ins.PeersMaxAcceptedProposeVal = nil
+		ins.prepareOK[i] = false
+		//ins.acceptOK[i] = false
+	}
 }

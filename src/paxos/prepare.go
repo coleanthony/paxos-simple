@@ -7,14 +7,19 @@ import (
 )
 
 func (px *Paxos) broadcastPrepare(ins *Instance, prepareok chan bool) {
+	px.mu.Lock()
+	sequencenum := ins.sequenceNum
+	proposenum := ins.proposeNum
+	px.mu.Unlock()
+
 	var wg sync.WaitGroup
 	for i := range px.peers {
 		if i == px.me {
 			//is myself, do preparehandler
 			args := &PrepareArgs{
 				Me:         px.me,
-				SeqNum:     ins.sequenceNum,
-				ProposeNum: ins.proposeNum,
+				SeqNum:     sequencenum,
+				ProposeNum: proposenum,
 			}
 			reply := &PrepareReplys{}
 			px.Prepare(args, reply)
@@ -23,24 +28,25 @@ func (px *Paxos) broadcastPrepare(ins *Instance, prepareok chan bool) {
 		}
 		wg.Add(1)
 		//send prepare
-		go func() {
+		go func(i int) {
 			//send prepare to peer i
 			defer wg.Done()
 			args := &PrepareArgs{
 				Me:         px.me,
-				SeqNum:     ins.sequenceNum,
-				ProposeNum: ins.proposeNum,
+				SeqNum:     sequencenum,
+				ProposeNum: proposenum,
 			}
 			reply := &PrepareReplys{}
 			ok := call(px.peers[i], "Paxos.Prepare", args, reply)
 			if ok {
 				px.PrepareHandler(args, reply)
 			} else {
-				fmt.Printf("proposer %d send prepare to acceptor %d error\n", px.me, i)
+				fmt.Printf("proposer %d send proposal to acceptor %d error\n", px.me, i)
 			}
-		}()
+		}(i)
 	}
 	wg.Wait()
+
 	px.mu.Lock()
 	if ins.prepareOKNum >= px.Majority() {
 		prepareok <- true
@@ -74,18 +80,45 @@ func (px *Paxos) Prepare(args *PrepareArgs, reply *PrepareReplys) {
 	ins.highestPrepareSeen = args.ProposeNum
 	reply.AcceptedNum = ins.highestAcceptSeen
 	reply.AcceptedValues = ins.accpetedvalues
-	return
 }
 
 //deal with prepare replys by proposer
-//返回的response中如果有last_round 大于round则直接退出
-//从所有response中选择value_round 最大的那个value
-//如果所有response中的value都是空，则选择自己提议的value
-//如果没有得到一个多数派集合的确认，则直接退出
 func (px *Paxos) PrepareHandler(args *PrepareArgs, reply *PrepareReplys) {
 	px.mu.Lock()
 	defer px.mu.Unlock()
 
+	px.UpdateMaxseenProposeNum(args.ProposeNum)
+
+	if args.SeqNum <= px.maxForgottenSeqNum {
+		return
+	}
+
+	ins := px.getInstance(args.SeqNum)
+	if ins.decidedvalues != nil {
+		return
+	}
+	if ins.proposeNum != args.ProposeNum {
+		return
+	}
+	if reply.OK {
+		ins.prepareOKNum++
+		ins.prepareOK[args.Me] = true
+		ins.PeersMaxAcceptedProposeNum[args.Me] = reply.AcceptedNum
+		ins.PeersMaxAcceptedProposeVal[args.Me] = reply.AcceptedValues
+	}
+}
+
+func (px *Paxos) chooseProposeVal(ins *Instance) {
+	px.mu.Lock()
+	defer px.mu.Unlock()
+
+	tmpMaxAcceptedProposeNum := -1
+	for i := 0; i < len(px.peers); i++ {
+		if ins.prepareOK[i] && ins.PeersMaxAcceptedProposeNum[i] < tmpMaxAcceptedProposeNum && ins.PeersMaxAcceptedProposeVal[i] != nil {
+			tmpMaxAcceptedProposeNum = ins.PeersMaxAcceptedProposeNum[i]
+			ins.proposevalues = ins.PeersMaxAcceptedProposeVal[i]
+		}
+	}
 }
 
 func (px *Paxos) chooseProposeNum() int {
@@ -117,6 +150,11 @@ func (px *Paxos) Propose(seqNum int, value interface{}) {
 		prepareok := make(chan bool)
 		go px.broadcastPrepare(ins, prepareok)
 
+		//返回的response中如果有last_round 大于round则直接退出
+		//从所有response中选择value_round 最大的那个value
+		//如果所有response中的value都是空，则选择自己提议的value
+		//如果没有得到一个多数派集合的确认，则直接退出
+
 		select {
 		case majorityprepared := <-prepareok:
 			if !majorityprepared {
@@ -132,6 +170,8 @@ func (px *Paxos) Propose(seqNum int, value interface{}) {
 		}
 
 		//phase2a
+		//发送 phase-2 RPC，带上phase-1决定的value和本次的round
+		px.chooseProposeVal(ins)
 		acceptok := make(chan bool)
 		go px.broadcastAccept(ins, acceptok)
 
@@ -153,13 +193,7 @@ func (px *Paxos) Propose(seqNum int, value interface{}) {
 		ins.Proposing = false
 		px.mu.Unlock()
 
-		go px.broadcastDecide()
+		go px.broadcastDecide(ins)
 		break
 	}
-}
-
-func (px *Paxos) Majority() int {
-	px.mu.Lock()
-	defer px.mu.Unlock()
-	return len(px.peers)/2 + 1
 }

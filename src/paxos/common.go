@@ -33,9 +33,10 @@ type AcceptReplys struct {
 }
 
 type DecideArgs struct {
-	Me     int
-	Value  interface{}
-	SeqNum int
+	Me         int
+	Value      interface{}
+	SeqNum     int
+	ProposeNum int
 }
 
 type DecideReplys struct {

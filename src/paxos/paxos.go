@@ -79,6 +79,12 @@ func (px *Paxos) UpdateMaxseenProposeNum(proposenum int) {
 	}
 }
 
+func (px *Paxos) Majority() int {
+	px.mu.Lock()
+	defer px.mu.Unlock()
+	return len(px.peers)/2 + 1
+}
+
 //
 // the application wants paxos to start agreement on
 // instance seq, with proposed value v.
