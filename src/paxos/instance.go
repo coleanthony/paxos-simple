@@ -1,7 +1,5 @@
 package paxos
 
-import "fmt"
-
 type PeerState int
 
 const (
@@ -36,7 +34,7 @@ type Instance struct {
 }
 
 func makeInstance(seqNum int, value interface{}, numpeers int) *Instance {
-	fmt.Println(numpeers)
+	//fmt.Println(numpeers)
 	instance := &Instance{
 		Proposing:   false,
 		sequenceNum: seqNum,
